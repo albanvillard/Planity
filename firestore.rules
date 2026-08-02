@@ -8,9 +8,12 @@ service cloud.firestore {
 
     // Règles de sécurité pour les blocs de temps (time_blocks)
     match /time_blocks/{blockId} {
-      // Lecture, modification et suppression autorisées uniquement si l'utilisateur est connecté 
-      // et qu'il est le propriétaire du document existant (userId)
-      allow read, update, delete: if request.auth != null && request.auth.uid == resource.data.userId;
+      // Lecture, modification et suppression autorisées si l'utilisateur est connecté 
+      // et qu'il est le propriétaire (userId) ou fait partie des destinataires partagés (sharedWith)
+      allow read, update, delete: if request.auth != null && (
+        request.auth.uid == resource.data.userId || 
+        ('sharedWith' in resource.data && request.auth.uid in resource.data.sharedWith)
+      );
       
       // Création autorisée uniquement si l'utilisateur est connecté 
       // et qu'il s'attribue lui-même la propriété du document (userId)
@@ -19,8 +22,19 @@ service cloud.firestore {
 
     // Règles de sécurité pour la collection des utilisateurs (users)
     match /users/{userId} {
-      // Lecture, écriture et suppression autorisées uniquement si l'utilisateur est propriétaire du document
-      allow read, write, delete: if request.auth != null && request.auth.uid == userId;
+      // Lecture autorisée pour tout utilisateur connecté pour permettre la recherche par pseudo
+      allow read: if request.auth != null;
+      // Écriture et suppression réservées au propriétaire
+      allow write, delete: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Règles de sécurité pour la collection friendships
+    match /friendships/{friendshipId} {
+      // Un utilisateur ne peut lire, modifier ou supprimer un document d'amitié que s'il en est l'expéditeur ou le destinataire
+      allow read, update, delete: if request.auth != null && (request.auth.uid == resource.data.senderId || request.auth.uid == resource.data.receiverId);
+      
+      // Un utilisateur ne peut créer une relation d'amitié que s'il en est l'expéditeur ou le destinataire
+      allow create: if request.auth != null && (request.auth.uid == request.resource.data.senderId || request.auth.uid == request.resource.data.receiverId);
     }
   }
 }

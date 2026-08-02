@@ -12,6 +12,7 @@ import { LongTermTrackers } from "./LongTermTrackers.jsx";
 import { AdvancedWeatherWidget } from "./AdvancedWeatherWidget.jsx";
 import Header from "./Header.jsx";
 import ProfileSettings from "./ProfileSettings.jsx";
+import Network from "./Network.jsx";
 
 /**
  * Composant principal Dashboard affiché à l'utilisateur connecté.
@@ -125,6 +126,11 @@ export function Dashboard({ user, onLogout, refreshUser }) {
             refreshUser={refreshUser}
             onBack={() => setActiveTab("planning")}
           />
+        ) : activeTab === "network" ? (
+          <Network
+            user={user}
+            onBack={() => setActiveTab("planning")}
+          />
         ) : (
           <>
             {/* Traqueurs Longue Durée */}
@@ -233,7 +239,7 @@ export function Dashboard({ user, onLogout, refreshUser }) {
       </main>
 
       {/* 5. Bouton Flottant mobile-first (Ajout rapide de tâche) */}
-      {activeTab !== "profile" && (
+      {activeTab !== "profile" && activeTab !== "network" && (
         <button
           onClick={handleOpenAddModal}
           type="button"
@@ -255,6 +261,7 @@ export function Dashboard({ user, onLogout, refreshUser }) {
         onDelete={handleDeleteBlock}
         block={selectedBlock}
         selectedDate={selectedDate}
+        userId={user.uid}
       />
     </div>
   );

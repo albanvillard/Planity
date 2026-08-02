@@ -146,11 +146,18 @@ function DraggableTimeBlock({ block, maxCols, onEditBlock }) {
             </p>
           )}
         </div>
-        {block.height >= 55 && block.category && (
-          <span className={`text-[9px] font-bold py-0.5 px-1.5 rounded-md w-fit mt-1 uppercase tracking-wider ${style.badge}`}>
-            {getCategoryBadgeText(block.category)}
-          </span>
-        )}
+        <div className="flex flex-wrap items-center gap-1 mt-1">
+          {block.height >= 55 && block.category && (
+            <span className={`text-[9px] font-bold py-0.5 px-1.5 rounded-md w-fit uppercase tracking-wider ${style.badge}`}>
+              {getCategoryBadgeText(block.category)}
+            </span>
+          )}
+          {block.creatorUsername && block.height >= 70 && (
+            <span className="text-[9.5px] font-black py-0.5 px-1.5 rounded-md bg-slate-200/40 dark:bg-slate-800/40 text-slate-500 dark:text-slate-400 truncate max-w-full">
+              👥 Par {block.creatorUsername}
+            </span>
+          )}
+        </div>
       </div>
     </button>
   );
@@ -380,9 +387,16 @@ export function DailyTimeline({ timeBlocks, onEditBlock, onUpdateBlock }) {
                     <h4 className="font-extrabold text-slate-800 dark:text-slate-100 text-sm sm:text-base">
                       {block.title}
                     </h4>
-                    <span className="text-xs font-semibold text-slate-400 dark:text-slate-550 mt-0.5 block">
-                      {getCategoryLabel(block.category)}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                      <span className="text-xs font-semibold text-slate-450 dark:text-slate-500">
+                        {getCategoryLabel(block.category)}
+                      </span>
+                      {block.creatorUsername && (
+                        <span className="text-[9.5px] font-black py-0.5 px-1.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
+                          👥 Par {block.creatorUsername}
+                        </span>
+                      )}
+                    </div>
                     {block.description && (
                       <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 italic line-clamp-1 max-w-md">
                         {block.description}

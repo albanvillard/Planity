@@ -21,7 +21,7 @@ import { db } from "../firebase.js";
  */
 export function useTimeBlocks(userId, selectedDate) {
   const [timeBlocks, setTimeBlocks] = useState([]);
-  
+
   // États de chargement et d'erreur
   const [prevUserId, setPrevUserId] = useState(userId);
   const [prevSelectedDate, setPrevSelectedDate] = useState(selectedDate);
@@ -43,48 +43,102 @@ export function useTimeBlocks(userId, selectedDate) {
       return;
     }
 
-    // Requête filtrée par l'identifiant de l'utilisateur ET par dateString pour la sécurité et la pertinence
-    const q = query(
+    // Requête 1: Tâches créées par l'utilisateur (rétrocompatibilité pour les blocs sans sharedWith)
+    const q1 = query(
       collection(db, "time_blocks"),
       where("userId", "==", userId),
       where("dateString", "==", selectedDate)
     );
 
-    // Écouteur en temps réel Firestore
-    const unsubscribe = onSnapshot(
-      q,
+    // Requête 2: Tâches partagées avec l'utilisateur
+    const q2 = query(
+      collection(db, "time_blocks"),
+      where("sharedWith", "array-contains", userId),
+      where("dateString", "==", selectedDate)
+    );
+
+    let blocks1 = [];
+    let blocks2 = [];
+
+    const handleUpdate = () => {
+      const merged = [...blocks1, ...blocks2];
+
+      // Déduplication des blocs par ID
+      const uniqueBlocks = [];
+      const seenIds = new Set();
+
+      for (const block of merged) {
+        if (!seenIds.has(block.id)) {
+          seenIds.add(block.id);
+          uniqueBlocks.push(block);
+        }
+      }
+
+      // Tri local par heure de début pour éviter l'obligation d'avoir un index composite sur Firestore
+      uniqueBlocks.sort((a, b) => {
+        if (a.startTime && b.startTime) {
+          return a.startTime.localeCompare(b.startTime);
+        }
+        return 0;
+      });
+
+      setTimeBlocks(uniqueBlocks);
+      setLoading(false);
+    };
+
+    // Écouteur en temps réel pour q1 (créateur)
+    const unsubscribe1 = onSnapshot(
+      q1,
       (querySnapshot) => {
-        const blocks = [];
+        const list = [];
         querySnapshot.forEach((docSnapshot) => {
           const data = docSnapshot.data();
           if (!data.isLongTerm) {
-            blocks.push({
+            list.push({
               id: docSnapshot.id,
               ...data
             });
           }
         });
-
-        // Tri local par heure de début pour éviter l'obligation d'avoir un index composite sur Firestore
-        blocks.sort((a, b) => {
-          if (a.startTime && b.startTime) {
-            return a.startTime.localeCompare(b.startTime);
-          }
-          return 0;
-        });
-
-        setTimeBlocks(blocks);
-        setLoading(false);
+        blocks1 = list;
+        handleUpdate();
       },
       (err) => {
-        console.error("Erreur onSnapshot Firestore :", err);
+        console.error("Erreur onSnapshot q1 :", err);
         setError(err);
         setLoading(false);
       }
     );
 
-    // Nettoyage de l'abonnement
-    return () => unsubscribe();
+    // Écouteur en temps réel pour q2 (partagé avec)
+    const unsubscribe2 = onSnapshot(
+      q2,
+      (querySnapshot) => {
+        const list = [];
+        querySnapshot.forEach((docSnapshot) => {
+          const data = docSnapshot.data();
+          if (!data.isLongTerm) {
+            list.push({
+              id: docSnapshot.id,
+              ...data
+            });
+          }
+        });
+        blocks2 = list;
+        handleUpdate();
+      },
+      (err) => {
+        console.error("Erreur onSnapshot q2 :", err);
+        setError(err);
+        setLoading(false);
+      }
+    );
+
+    // Nettoyage des abonnements
+    return () => {
+      unsubscribe1();
+      unsubscribe2();
+    };
   }, [userId, selectedDate]);
 
   // Ajouter un bloc de temps associé à la date sélectionnée
@@ -92,9 +146,20 @@ export function useTimeBlocks(userId, selectedDate) {
     async (blockData, customDate) => {
       if (!userId) throw new Error("Utilisateur non connecté.");
       try {
+        // Garantir que sharedWith contient au moins le créateur, même s'il n'est pas fourni dans blockData
+        const sharedWith = blockData.sharedWith && blockData.sharedWith.length > 0
+          ? [...new Set([userId, ...blockData.sharedWith])]
+          : [userId];
+
+        const creatorId = userId;
+        const creatorUsername = auth.currentUser?.displayName || auth.currentUser?.email?.split("@")[0] || "Inconnu";
+
         const docRef = await addDoc(collection(db, "time_blocks"), {
           ...blockData,
+          sharedWith,
           userId,
+          creatorId,
+          creatorUsername,
           dateString: customDate || selectedDate, // Enregistre la tâche pour la date sélectionnée ou spécifique
           createdAt: new Date().toISOString()
         });
@@ -113,8 +178,14 @@ export function useTimeBlocks(userId, selectedDate) {
       if (!userId) throw new Error("Utilisateur non connecté.");
       try {
         const docRef = doc(db, "time_blocks", blockId);
+
+        let dataToUpdate = { ...blockData };
+        if (blockData.sharedWith) {
+          dataToUpdate.sharedWith = [...new Set([userId, ...blockData.sharedWith])];
+        }
+
         await updateDoc(docRef, {
-          ...blockData,
+          ...dataToUpdate,
           updatedAt: new Date().toISOString()
         });
       } catch (err) {

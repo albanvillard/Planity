@@ -1,6 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { CATEGORIES } from "../constants/categories.js";
+import { auth, db } from "../firebase.js";
+import { collection, query, where, getDocs } from "firebase/firestore";
+
 
 // Jours de la semaine ordonnés selon l'usage français (Lundi à Dimanche) avec valeur de Date.getDay()
 const WEEKDAYS = [
@@ -21,13 +24,125 @@ const WEEKDAYS = [
 export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selectedDate }) {
   const { t } = useTranslation();
 
+  // Liste des amis et sélection
+  const [friends, setFriends] = useState([]);
+  const [selectedFriends, setSelectedFriends] = useState(() => {
+    if (block && block.sharedWith) {
+      const creatorId = block.userId || auth.currentUser?.uid;
+      return block.sharedWith.filter(id => id !== creatorId);
+    }
+    return [];
+  });
+  const [loadingFriends, setLoadingFriends] = useState(false);
+
+  // Charger la liste des amis acceptés lorsque la modale s'ouvre
+  useEffect(() => {
+    if (!isOpen || !auth.currentUser) return;
+
+    const fetchFriends = async () => {
+      setLoadingFriends(true);
+      try {
+        const uid = auth.currentUser.uid;
+        const q1 = query(
+          collection(db, "friendships"),
+          where("senderId", "==", uid),
+          where("status", "==", "accepted")
+        );
+        const q2 = query(
+          collection(db, "friendships"),
+          where("receiverId", "==", uid),
+          where("status", "==", "accepted")
+        );
+
+        const [snap1, snap2] = await Promise.all([getDocs(q1), getDocs(q2)]);
+
+        const list1 = snap1.docs.map((doc) => {
+          const d = doc.data();
+          return { uid: d.receiverId, username: d.receiverUsername };
+        });
+        const list2 = snap2.docs.map((doc) => {
+          const d = doc.data();
+          return { uid: d.senderId, username: d.senderUsername };
+        });
+
+        const merged = [...list1, ...list2];
+        const unique = merged.filter((item, index, self) =>
+          self.findIndex((t) => t.uid === item.uid) === index
+        );
+
+        setFriends(unique);
+      } catch (err) {
+        console.error("Erreur lors de la récupération des amis dans la modale :", err);
+      } finally {
+        setLoadingFriends(false);
+      }
+    };
+
+    fetchFriends();
+  }, [isOpen]);
+
+  const canEdit = !block || !block.creatorId || block.creatorId === auth.currentUser?.uid;
+
+  const getParticipantUsername = (uid) => {
+    if (uid === auth.currentUser?.uid) {
+      return "Vous";
+    }
+    const friend = friends.find((f) => f.uid === uid);
+    return friend ? friend.username : "Un ami";
+  };
+
+  const checkConflicts = async (start, end, participants) => {
+    const conflicts = [];
+
+    const timeToMinutes = (t) => {
+      if (!t) return 0;
+      const [h, m] = t.split(":").map(Number);
+      return h * 60 + m;
+    };
+
+    const s1 = timeToMinutes(start);
+    const e1 = timeToMinutes(end);
+
+    const checkPromises = participants.map(async (uid) => {
+      const q = query(
+        collection(db, "time_blocks"),
+        where("dateString", "==", selectedDate),
+        where("sharedWith", "array-contains", uid)
+      );
+      const snap = await getDocs(q);
+
+      for (const d of snap.docs) {
+        if (block && d.id === block.id) continue;
+
+        const data = d.data();
+        if (data.isLongTerm) continue;
+
+        const s2 = timeToMinutes(data.startTime);
+        const e2 = timeToMinutes(data.endTime);
+
+        if (Math.max(s1, s2) < Math.min(e1, e2)) {
+          conflicts.push({
+            uid,
+            blockTitle: data.title,
+            startTime: data.startTime,
+            endTime: data.endTime
+          });
+          break;
+        }
+      }
+    });
+
+    await Promise.all(checkPromises);
+    return conflicts;
+  };
+
   // Initialisation directe de l'état avec les valeurs du bloc (ou par défaut)
   const [title, setTitle] = useState(block ? block.title || "" : "");
   const [startTime, setStartTime] = useState(block ? block.startTime || "09:00" : "09:00");
   const [endTime, setEndTime] = useState(block ? block.endTime || "10:00" : "10:00");
   const [category, setCategory] = useState(block ? block.category || "" : "");
   const [description, setDescription] = useState(block ? block.description || "" : "");
-  
+
   // États locaux pour le traqueur longue durée
   const [isLongTerm, setIsLongTerm] = useState(block ? block.isLongTerm || false : false);
   const [endDateTime, setEndDateTime] = useState(() => {
@@ -41,7 +156,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
     const min = String(demain.getMinutes()).padStart(2, "0");
     return `${y}-${m}-${d}T${h}:${min}`;
   });
-  
+
   // États locaux de récurrence (visible uniquement à la création)
   const [repeatWeekly, setRepeatWeekly] = useState(false);
   const [repeatWeeksCount, setRepeatWeeksCount] = useState(4);
@@ -52,7 +167,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
     }
     return [1]; // Lundi par défaut
   });
-  
+
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -116,12 +231,34 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
     }
 
     setSubmitting(true);
+
+    // Vérification anti-conflit (uniquement pour les événements non-long-terme)
+    if (!isLongTerm) {
+      try {
+        const participants = [auth.currentUser?.uid].filter(Boolean);
+        const conflicts = await checkConflicts(startTime, endTime, participants);
+        if (conflicts.length > 0) {
+          const firstConflict = conflicts[0];
+          const username = getParticipantUsername(firstConflict.uid);
+          setError(`Impossible : ${username} a déjà un événement prévu de ${firstConflict.startTime} à ${firstConflict.endTime} (${firstConflict.blockTitle})`);
+          setSubmitting(false);
+          return;
+        }
+      } catch (err) {
+        console.error("Erreur lors du contrôle anti-conflit :", err);
+        setError("Erreur lors de la vérification de la disponibilité des participants.");
+        setSubmitting(false);
+        return;
+      }
+    }
+
     try {
       await onSave({
         ...payload,
+        sharedWith: selectedFriends,
         // Transmettre les options de récurrence si c'est une création et pas un traqueur
-        ...(!block && !isLongTerm ? { 
-          repeatWeekly, 
+        ...(!block && !isLongTerm ? {
+          repeatWeekly,
           repeatWeeksCount: Number(repeatWeeksCount),
           selectedDays
         } : {})
@@ -137,7 +274,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
 
   const handleDelete = async () => {
     if (!block || !onDelete) return;
-    
+
     const confirmation = window.confirm(t("modal.confirmDelete"));
     if (!confirmation) return;
 
@@ -156,7 +293,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
   return (
     <div className="fixed inset-0 bg-slate-950/60 dark:bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 transition-all duration-300 animate-fade-in font-sans">
       <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-slate-100 dark:border-slate-800 transform scale-100 transition-transform p-6 relative">
-        
+
         {/* Entête */}
         <div className="flex items-center justify-between mb-5">
           <h3 className="text-xl font-extrabold text-slate-800 dark:text-slate-100">
@@ -173,6 +310,13 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
           </button>
         </div>
 
+        {/* Banner Événement partagé */}
+        {!canEdit && (
+          <div className="mb-4 bg-indigo-50 dark:bg-indigo-950/20 border border-indigo-205 dark:border-indigo-900/55 text-indigo-800 dark:text-indigo-400 rounded-xl p-3.5 text-xs font-bold flex items-center gap-2">
+            <span>🤝 Événement partagé créé par <span className="underline">{block.creatorUsername || "Inconnu"}</span></span>
+          </div>
+        )}
+
         {/* Message d'erreur local */}
         {error && (
           <div className="mb-4 flex items-start gap-2 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-350 rounded-xl p-3.5 text-xs">
@@ -185,7 +329,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
 
         {/* Formulaire */}
         <form onSubmit={handleSubmit} className="space-y-4">
-          
+
           {/* Titre */}
           <div>
             <label htmlFor="modal-title" className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
@@ -195,7 +339,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
               id="modal-title"
               type="text"
               required
-              disabled={submitting}
+              disabled={submitting || !canEdit}
               placeholder={t("modal.placeholderTitle")}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -212,7 +356,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
               id="modal-category"
               type="text"
               list="category-suggestions"
-              disabled={submitting}
+              disabled={submitting || !canEdit}
               placeholder={t("modal.placeholderCategory")}
               value={category}
               onChange={(e) => setCategory(e.target.value)}
@@ -233,7 +377,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
             <textarea
               id="modal-description"
               rows={3}
-              disabled={submitting}
+              disabled={submitting || !canEdit}
               placeholder={t("modal.placeholderDescription")}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -241,12 +385,48 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
             />
           </div>
 
+          {/* Section Partager avec des amis */}
+          {loadingFriends ? (
+            <div className="text-xs text-slate-400 dark:text-slate-500 font-semibold animate-pulse py-1">
+              Chargement de vos amis...
+            </div>
+          ) : friends.length > 0 ? (
+            <div className="space-y-2 bg-slate-50 dark:bg-slate-850 p-4.5 rounded-2xl border border-slate-100 dark:border-slate-800 transition-all duration-200">
+              <span className="block text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1.5">
+                Partager avec des amis (Optionnel)
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-32 overflow-y-auto pr-1">
+                {friends.map((friend) => {
+                  const isChecked = selectedFriends.includes(friend.uid);
+                  return (
+                    <label key={friend.uid} className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        disabled={submitting || !canEdit}
+                        onChange={() => {
+                          if (isChecked) {
+                            setSelectedFriends(selectedFriends.filter(id => id !== friend.uid));
+                          } else {
+                            setSelectedFriends([...selectedFriends, friend.uid]);
+                          }
+                        }}
+                        className="w-4 h-4 rounded border-slate-350 dark:border-slate-700 text-indigo-600 focus:ring-indigo-500 accent-indigo-600 cursor-pointer"
+                      />
+                      <span className="font-semibold truncate">{friend.username}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+
           {/* Option Traqueur Longue Durée */}
           <div className="space-y-4 bg-slate-50 dark:bg-slate-850 p-4.5 rounded-2xl border border-slate-100 dark:border-slate-800 transition-all duration-200">
             <label className="flex items-center gap-3 cursor-pointer select-none">
               <input
                 type="checkbox"
-                disabled={submitting}
+                disabled={submitting || !canEdit}
                 checked={isLongTerm}
                 onChange={(e) => {
                   setIsLongTerm(e.target.checked);
@@ -273,7 +453,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
                   id="modal-start-time"
                   type="time"
                   required
-                  disabled={submitting}
+                  disabled={submitting || !canEdit}
                   value={startTime}
                   onChange={(e) => setStartTime(e.target.value)}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-slate-50 dark:bg-slate-800 focus:bg-white dark:focus:bg-slate-900 text-slate-800 dark:text-slate-100 transition-all duration-200 font-medium"
@@ -287,7 +467,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
                   id="modal-end-time"
                   type="time"
                   required
-                  disabled={submitting}
+                  disabled={submitting || !canEdit}
                   value={endTime}
                   onChange={(e) => setEndTime(e.target.value)}
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-slate-50 dark:bg-slate-800 focus:bg-white dark:focus:bg-slate-900 text-slate-800 dark:text-slate-100 transition-all duration-200 font-medium"
@@ -303,7 +483,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
                 id="modal-end-datetime"
                 type="datetime-local"
                 required
-                disabled={submitting}
+                disabled={submitting || !canEdit}
                 value={endDateTime}
                 onChange={(e) => setEndDateTime(e.target.value)}
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-slate-50 dark:bg-slate-800 focus:bg-white dark:focus:bg-slate-900 text-slate-800 dark:text-slate-100 transition-all duration-200 font-medium"
@@ -317,7 +497,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
               <label className="flex items-center gap-3 cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  disabled={submitting}
+                  disabled={submitting || !canEdit}
                   checked={repeatWeekly}
                   onChange={(e) => setRepeatWeekly(e.target.checked)}
                   className="w-5 h-5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 accent-indigo-600 cursor-pointer"
@@ -342,7 +522,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
                           <button
                             key={day.value}
                             type="button"
-                            disabled={submitting}
+                            disabled={submitting || !canEdit}
                             onClick={() => {
                               if (isSelected) {
                                 // Garder au moins un jour sélectionné
@@ -353,11 +533,10 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
                                 setSelectedDays([...selectedDays, day.value]);
                               }
                             }}
-                            className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-black transition-all duration-200 cursor-pointer select-none ${
-                              isSelected
+                            className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-black transition-all duration-200 cursor-pointer select-none ${isSelected
                                 ? "bg-purple-600 text-white shadow-md shadow-purple-600/30"
                                 : "bg-slate-200 dark:bg-slate-800 hover:bg-slate-300/80 dark:hover:bg-slate-700/80 text-slate-700 dark:text-slate-300"
-                            }`}
+                              }`}
                           >
                             {day.label}
                           </button>
@@ -377,7 +556,7 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
                       min={1}
                       max={52}
                       required
-                      disabled={submitting}
+                      disabled={submitting || !canEdit}
                       value={repeatWeeksCount}
                       onChange={(e) => setRepeatWeeksCount(Math.min(52, Math.max(1, Number(e.target.value) || 1)))}
                       className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 transition-all duration-200 font-medium"
@@ -392,13 +571,13 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
           )}
 
           <div className="pt-4 flex flex-col-reverse sm:flex-row gap-2 justify-end border-t border-slate-100 dark:border-slate-800 mt-6">
-            {/* Bouton de Suppression (affiché seulement si modification d'un bloc existant) */}
-            {block && onDelete && (
+            {/* Bouton de Suppression (affiché seulement si modification d'un bloc existant et modifiable) */}
+            {block && onDelete && canEdit && (
               <button
                 type="button"
                 onClick={handleDelete}
                 disabled={submitting}
-                className="w-full sm:w-auto px-4 py-3 rounded-xl bg-rose-50 dark:bg-rose-950/20 hover:bg-rose-100 dark:hover:bg-rose-900/30 text-rose-600 dark:text-rose-400 font-bold transition-all duration-200 cursor-pointer active:scale-95 text-center mr-auto"
+                className="w-full sm:w-auto px-4 py-3 rounded-xl bg-rose-50 dark:bg-rose-950/20 hover:bg-rose-100 dark:hover:bg-rose-900/30 text-rose-600 dark:text-rose-450 font-bold transition-all duration-200 cursor-pointer active:scale-95 text-center mr-auto"
               >
                 {t("modal.btnDelete")}
               </button>
@@ -410,23 +589,25 @@ export function BlockFormModal({ isOpen, onClose, onSave, onDelete, block, selec
               disabled={submitting}
               className="w-full sm:w-auto px-5 py-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700/80 text-slate-700 dark:text-slate-305 font-bold transition-all duration-200 cursor-pointer active:scale-95 text-center"
             >
-              {t("modal.btnCancel")}
+              {canEdit ? t("modal.btnCancel") : "Fermer"}
             </button>
-            
-            <button
-              type="submit"
-              disabled={submitting}
-              className="w-full sm:w-auto px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition-all duration-200 shadow-md shadow-indigo-600/10 dark:shadow-indigo-500/20 cursor-pointer active:scale-95 text-center flex items-center justify-center gap-1.5"
-            >
-              {submitting ? (
-                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-              ) : (
-                <span>{block ? t("modal.btnSaveEdit") : t("modal.btnSaveAdd")}</span>
-              )}
-            </button>
+
+            {canEdit && (
+              <button
+                type="submit"
+                disabled={submitting}
+                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold transition-all duration-200 shadow-md shadow-indigo-600/10 dark:shadow-indigo-500/20 cursor-pointer active:scale-95 text-center flex items-center justify-center gap-1.5"
+              >
+                {submitting ? (
+                  <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                ) : (
+                  <span>{block ? t("modal.btnSaveEdit") : t("modal.btnSaveAdd")}</span>
+                )}
+              </button>
+            )}
           </div>
         </form>
       </div>
