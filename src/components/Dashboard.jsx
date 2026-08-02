@@ -13,6 +13,8 @@ import { AdvancedWeatherWidget } from "./AdvancedWeatherWidget.jsx";
 import Header from "./Header.jsx";
 import ProfileSettings from "./ProfileSettings.jsx";
 import Network from "./Network.jsx";
+import GroupsManager from "./GroupsManager.jsx";
+import GroupDetails from "./GroupDetails.jsx";
 
 /**
  * Composant principal Dashboard affiché à l'utilisateur connecté.
@@ -31,6 +33,7 @@ export function Dashboard({ user, onLogout, refreshUser }) {
   // État de la date sélectionnée (initialisé sur aujourd'hui au format "YYYY-MM-DD")
   const [selectedDate, setSelectedDate] = useState(getTodayDateString());
   const [activeTab, setActiveTab] = useState("planning"); // "planning" ou "stats"
+  const [selectedGroupId, setSelectedGroupId] = useState(null);
 
   // Charger le CRUD et l'écouteur temps réel pour la date spécifique depuis useTimeBlocks
   const {
@@ -133,52 +136,60 @@ export function Dashboard({ user, onLogout, refreshUser }) {
           />
         ) : (
           <>
-            {/* Traqueurs Longue Durée */}
-            <LongTermTrackers userId={user.uid} onEditBlock={handleOpenEditModal} />
-            
-            {/* Grille du haut : Entête, DateSelector & Widget Météo iOS */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
-              <div className="md:col-span-2 flex flex-col gap-6">
-                {/* Section Entête de la journée */}
-                <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-100 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 transition-colors duration-300 flex-1">
-                  <div>
-                    <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100 tracking-tight">
-                      {t("dashboard.myDay")}
-                    </h2>
-                    <p className="text-sm text-slate-400 dark:text-slate-500 font-medium">
-                      {loading ? "..." : t("dashboard.tasksCount", { count: timeBlocks.length })}
-                    </p>
+            {/* Traqueurs Longue Durée & Grille du haut affichés uniquement hors onglet Vacances */}
+            {activeTab !== "vacances" && (
+              <>
+                {/* Traqueurs Longue Durée */}
+                <LongTermTrackers userId={user.uid} onEditBlock={handleOpenEditModal} />
+                
+                {/* Grille du haut : Entête, DateSelector & Widget Météo iOS */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
+                  <div className="md:col-span-2 flex flex-col gap-6">
+                    {/* Section Entête de la journée */}
+                    <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-100 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 transition-colors duration-300 flex-1">
+                      <div>
+                        <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100 tracking-tight">
+                          {t("dashboard.myDay")}
+                        </h2>
+                        <p className="text-sm text-slate-400 dark:text-slate-500 font-medium">
+                          {loading ? "..." : t("dashboard.tasksCount", { count: timeBlocks.length })}
+                        </p>
+                      </div>
+
+                      {/* Bouton d'ajout principal */}
+                      <button
+                        onClick={handleOpenAddModal}
+                        type="button"
+                        className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold px-5 py-3 rounded-2xl shadow-lg shadow-indigo-600/10 dark:shadow-indigo-500/20 hover:shadow-indigo-600/20 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 cursor-pointer self-start sm:self-auto"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                        </svg>
+                        <span>{t("dashboard.addTask")}</span>
+                      </button>
+                    </div>
+
+                    {/* Sélecteur de date (DateSelector) */}
+                    <DateSelector
+                      selectedDate={selectedDate}
+                      onChangeDate={setSelectedDate}
+                    />
                   </div>
-
-                  {/* Bouton d'ajout principal */}
-                  <button
-                    onClick={handleOpenAddModal}
-                    type="button"
-                    className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold px-5 py-3 rounded-2xl shadow-lg shadow-indigo-600/10 dark:shadow-indigo-500/20 hover:shadow-indigo-600/20 transition-all duration-200 hover:-translate-y-0.5 active:translate-y-0 active:scale-95 cursor-pointer self-start sm:self-auto"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                    </svg>
-                    <span>{t("dashboard.addTask")}</span>
-                  </button>
+                  
+                  <div className="md:col-span-1">
+                    <AdvancedWeatherWidget />
+                  </div>
                 </div>
+              </>
+            )}
 
-                {/* Sélecteur de date (DateSelector) */}
-                <DateSelector
-                  selectedDate={selectedDate}
-                  onChangeDate={setSelectedDate}
-                />
-              </div>
-              
-              <div className="md:col-span-1">
-                <AdvancedWeatherWidget />
-              </div>
-            </div>
-
-            {/* Navigation par onglets (Tabs) en pilule */}
-            <div className="flex bg-slate-200/50 dark:bg-slate-800/80 p-1 rounded-2xl w-full max-w-[280px] mx-auto shadow-inner border border-slate-100/50 dark:border-slate-700/50 transition-colors duration-300">
+            {/* Navigation par onglets (Tabs) en pilule élargie pour 3 onglets */}
+            <div className="flex bg-slate-200/50 dark:bg-slate-800/80 p-1 rounded-2xl w-full max-w-[380px] mx-auto shadow-inner border border-slate-100/50 dark:border-slate-700/50 transition-colors duration-300">
               <button
-                onClick={() => setActiveTab("planning")}
+                onClick={() => {
+                  setActiveTab("planning");
+                  setSelectedGroupId(null);
+                }}
                 className={`flex-1 py-2 rounded-xl text-xs font-black transition-all duration-200 cursor-pointer text-center ${
                   activeTab === "planning"
                     ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
@@ -188,7 +199,10 @@ export function Dashboard({ user, onLogout, refreshUser }) {
                 {t("dashboard.planningTab")}
               </button>
               <button
-                onClick={() => setActiveTab("stats")}
+                onClick={() => {
+                  setActiveTab("stats");
+                  setSelectedGroupId(null);
+                }}
                 className={`flex-1 py-2 rounded-xl text-xs font-black transition-all duration-200 cursor-pointer text-center ${
                   activeTab === "stats"
                     ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
@@ -197,24 +211,34 @@ export function Dashboard({ user, onLogout, refreshUser }) {
               >
                 {t("dashboard.statsTab")}
               </button>
+              <button
+                onClick={() => setActiveTab("vacances")}
+                className={`flex-1 py-2 rounded-xl text-xs font-black transition-all duration-200 cursor-pointer text-center ${
+                  activeTab === "vacances"
+                    ? "bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-sm"
+                    : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200"
+                }`}
+              >
+                {t("dashboard.vacancesTab", "Vacances")}
+              </button>
             </div>
 
-            {/* Gestion des erreurs Firestore */}
-            {error && (
+            {/* Gestion des erreurs Firestore pour le Planning */}
+            {activeTab === "planning" && error && (
               <div className="flex items-start gap-3 bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900 text-rose-800 dark:text-rose-350 rounded-2xl p-4 text-sm animate-fade-in">
                 <svg className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <div>
                   <span className="font-bold">Erreur de chargement base de données :</span>
-                  <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">
+                  <p className="text-xs text-rose-600 dark:text-rose-450 mt-1">
                     Veuillez rafraîchir la page ou vérifier vos permissions Firestore.
                   </p>
                 </div>
               </div>
             )}
 
-            {/* 4. Ligne de Temps (DailyTimeline) ou Statistiques */}
+            {/* Rendu dynamique des onglets */}
             {activeTab === "planning" ? (
               loading ? (
                 <div className="bg-white dark:bg-slate-900 rounded-3xl p-12 text-center border border-slate-100 dark:border-slate-800 shadow-sm flex flex-col items-center justify-center min-h-[300px] transition-colors duration-300">
@@ -231,15 +255,26 @@ export function Dashboard({ user, onLogout, refreshUser }) {
                   onUpdateBlock={updateTimeBlock}
                 />
               )
-            ) : (
+            ) : activeTab === "stats" ? (
               <StatisticsDashboard user={user} selectedDate={selectedDate} />
+            ) : selectedGroupId ? (
+              <GroupDetails
+                groupId={selectedGroupId}
+                user={user}
+                onBack={() => setSelectedGroupId(null)}
+              />
+            ) : (
+              <GroupsManager
+                user={user}
+                onSelectGroup={setSelectedGroupId}
+              />
             )}
           </>
         )}
       </main>
 
       {/* 5. Bouton Flottant mobile-first (Ajout rapide de tâche) */}
-      {activeTab !== "profile" && activeTab !== "network" && (
+      {activeTab !== "profile" && activeTab !== "network" && activeTab !== "vacances" && (
         <button
           onClick={handleOpenAddModal}
           type="button"

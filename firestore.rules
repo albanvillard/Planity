@@ -36,5 +36,24 @@ service cloud.firestore {
       // Un utilisateur ne peut créer une relation d'amitié que s'il en est l'expéditeur ou le destinataire
       allow create: if request.auth != null && (request.auth.uid == request.resource.data.senderId || request.auth.uid == request.resource.data.receiverId);
     }
+
+    // Règles de sécurité pour la collection des groupes (groups)
+    match /groups/{groupId} {
+      // Lecture et modification autorisées si l'utilisateur est dans le tableau members du groupe
+      allow read, update: if request.auth != null && request.auth.uid in resource.data.members;
+      // Création autorisée pour tout utilisateur connecté qui s'ajoute lui-même dans members
+      allow create: if request.auth != null && request.auth.uid in request.resource.data.members;
+    }
+
+    // Règles de sécurité pour la collection des dépenses (expenses)
+    match /expenses/{expenseId} {
+      // Lecture et suppression autorisées si l'utilisateur fait partie des membres du groupe parent (groupId)
+      allow read, delete: if request.auth != null && 
+        request.auth.uid in get(/databases/{database}/documents/groups/$(resource.data.groupId)).data.members;
+      
+      // Création et modification autorisées si l'utilisateur fait partie des membres du groupe parent (groupId)
+      allow create, update: if request.auth != null && 
+        request.auth.uid in get(/databases/{database}/documents/groups/$(request.resource.data.groupId)).data.members;
+    }
   }
 }

@@ -9,7 +9,7 @@ import {
   deleteDoc,
   doc
 } from "firebase/firestore";
-import { db } from "../firebase.js";
+import { db, auth } from "../firebase.js";
 
 /**
  * Hook personnalisé useTimeBlocks pour gérer les blocs de temps d'un utilisateur dans Firestore,
